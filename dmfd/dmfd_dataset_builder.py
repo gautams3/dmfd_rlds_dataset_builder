@@ -7,8 +7,11 @@ import tensorflow_datasets as tfds
 import tensorflow_hub as hub
 
 
-class ExampleDataset(tfds.core.GeneratorBasedBuilder):
-    """DatasetBuilder for example dataset."""
+class Dmfd(tfds.core.GeneratorBasedBuilder):
+    """DatasetBuilder for DMfD dataset.
+
+    Pick place action space for cloth folding diagonal task.
+    """
 
     VERSION = tfds.core.Version('1.0.0')
     RELEASE_NOTES = {
@@ -26,29 +29,29 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
                 'steps': tfds.features.Dataset({
                     'observation': tfds.features.FeaturesDict({
                         'image': tfds.features.Image(
-                            shape=(64, 64, 3),
+                            shape=(32, 32, 3),
                             dtype=np.uint8,
                             encoding_format='png',
-                            doc='Main camera RGB observation.',
+                            doc='Image observation of cloth.',
                         ),
-                        'wrist_image': tfds.features.Image(
-                            shape=(64, 64, 3),
-                            dtype=np.uint8,
-                            encoding_format='png',
-                            doc='Wrist camera RGB observation.',
-                        ),
-                        'state': tfds.features.Tensor(
-                            shape=(10,),
-                            dtype=np.float32,
-                            doc='Robot state, consists of [7x robot joint angles, '
-                                '2x gripper position, 1x door opening angle].',
-                        )
+                        # 'wrist_image': tfds.features.Image(
+                        #     shape=(64, 64, 3),
+                        #     dtype=np.uint8,
+                        #     encoding_format='png',
+                        #     doc='Wrist camera RGB observation.',
+                        # ),
+                        # 'state': tfds.features.Tensor(
+                        #     shape=(10,),
+                        #     dtype=np.float32,
+                        #     doc='Robot state, consists of [7x robot joint angles, '
+                        #         '2x gripper position, 1x door opening angle].',
+                        # )
                     }),
                     'action': tfds.features.Tensor(
-                        shape=(10,),
+                        shape=(4,),
                         dtype=np.float32,
-                        doc='Robot action, consists of [7x joint velocities, '
-                            '2x gripper velocities, 1x terminate episode].',
+                        doc='Robot action, consists of x,y,z goal and picker command'
+                         'picker<0.5 = open, picker>0.5 = close.',
                     ),
                     'discount': tfds.features.Scalar(
                         dtype=np.float32,
@@ -56,7 +59,9 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
                     ),
                     'reward': tfds.features.Scalar(
                         dtype=np.float32,
-                        doc='Reward if provided, 1 on final step for demos.'
+                        doc='Reward as a normalized performance metric in [0, 1].'
+                        '0 = no change from initial state. 1 = perfect fold.'
+                        '-ve performance means the cloth is worse off than initial state.'
                     ),
                     'is_first': tfds.features.Scalar(
                         dtype=np.bool_,
@@ -99,27 +104,35 @@ class ExampleDataset(tfds.core.GeneratorBasedBuilder):
 
         def _parse_example(episode_path):
             # load raw data --> this should change for your dataset
-            data = np.load(episode_path, allow_pickle=True)     # this is a list of dicts in our case
+            data = np.load(episode_path, allow_pickle=True)[()]
+            # print(f'Loaded episode from {episode_path}')
 
             # assemble episode --> here we're assuming demos so we set reward to 1 at the end
             episode = []
-            for i, step in enumerate(data):
+            num_steps = len(data['obs_img'])
+            # for i, step in enumerate(data):
+            for i in range(num_steps):
+                # print(f'Processing step {i} of {num_steps}')
+                # import ipdb; ipdb.set_trace()
                 # compute Kona language embedding
-                language_embedding = self._embed([step['language_instruction']])[0].numpy()
+                # try this, if fails then load ipdb and debug
+                try:
+                    language_embedding = self._embed([data['language_instruction']])[0].numpy()
+                except:
+                    import ipdb; ipdb.set_trace()
+                    language_embedding = self._embed([data['language_instruction']])[0].numpy()
 
                 episode.append({
                     'observation': {
-                        'image': step['image'],
-                        'wrist_image': step['wrist_image'],
-                        'state': step['state'],
+                        'image': data['obs_img'][i],
                     },
-                    'action': step['action'],
+                    'action': np.array(data['action'][i], dtype=np.float32),
                     'discount': 1.0,
-                    'reward': float(i == (len(data) - 1)),
+                    'reward': 0.0 if i < (num_steps - 1) else data['reward'],
                     'is_first': i == 0,
-                    'is_last': i == (len(data) - 1),
-                    'is_terminal': i == (len(data) - 1),
-                    'language_instruction': step['language_instruction'],
+                    'is_last': i == (num_steps - 1),
+                    'is_terminal': i == (num_steps - 1),
+                    'language_instruction': data['language_instruction'],
                     'language_embedding': language_embedding,
                 })
 
